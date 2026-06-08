@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sslvtc"
+version = "0.1.0"
+description = "SSL-VTC: semi-supervised VAE for vessel trajectory classification from AIS data (Duan et al. 2022)"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "pyarrow>=15.0.0",
+  "scikit-learn>=1.4",
+  "PyYAML>=6.0.1",
+  "matplotlib>=3.8",
+  "requests>=2.31",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+sslvtc = "sslvtc.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

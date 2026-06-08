@@ -1,0 +1,37 @@
+# Fast smoke config: synthetic data, tiny model run. Not for real results.
+bbox:
+  lat_min: 40.0
+  lat_max: 41.0
+  lon_min: -74.5
+  lon_max: -73.5
+
+paths:
+  raw: data/smoke/raw
+  interim: data/smoke/interim
+  processed: data/smoke/processed
+  results: data/smoke/results
+
+ingest:
+  train_months: [1, 2, 3, 4]
+  val_months: [5]
+  test_months: [6]
+
+extraction:
+  max_gap_hours: 2.0
+  min_span_hours: 6.0
+  min_messages: 160
+  abnormal_max_sog: 1.0
+  moving_sog_threshold: 2.0
+  min_moving_fraction: 0.30
+  fixed_length: 160
+
+encoding:
+  bins: {LAT: 20, LON: 20, SOG: 16, COG: 16, WID: 8, LEN: 10, DRA: 8}
+
+train:
+  lr: 0.0005
+  batch_size: 16
+  epochs: 3
+  labeled_fraction: 0.3
+  beta: 10.0
+  device: auto

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# venv
+.venv/
+venv/
+
+# data + outputs (large / generated)
+data/
+results/
+*.npy
+*.parquet
+*.pt
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# local Claude Code settings
+.claude/
