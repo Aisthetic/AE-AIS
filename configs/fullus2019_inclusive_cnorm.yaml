@@ -1,0 +1,62 @@
+# Static-inclusive cohort, but normalized with the COMPLETE cohort's (fullus2019)
+# stats — so Model A (trained on fullus2019) can be evaluated on the dropped vessels
+# with matched normalization (the correct deployment eval). Reuses fullus2019 interim
+# *_bymmsi shards; no re-ingest. Identical to fullus2019_inclusive except norm_stats_from.
+bbox:
+  lat_min: null
+  lat_max: null
+  lon_min: null
+  lon_max: null
+
+paths:
+  raw:       /mnt/storage_1_10T/zezzahed/AIS_Data/gulf2019/raw
+  interim:   /mnt/storage_1_10T/zezzahed/AIS_Data/fullus2019/interim
+  processed: /mnt/storage_1_10T/zezzahed/AIS_Data/fullus2019_inclusive_cnorm/processed
+  results:   /mnt/storage_1_10T/zezzahed/AIS_Data/fullus2019_inclusive_cnorm/results
+
+download:
+  year: 2019
+  months: [1, 2, 3, 4, 5, 6]
+  max_days_per_month: null
+
+ingest:
+  chunk_size: 100000
+  max_sog_knots: 60.0
+  train_months: [1, 2, 3, 4]
+  val_months: [5]
+  test_months: [6]
+
+extraction:
+  max_gap_hours: 2.0
+  min_span_hours: 6.0
+  min_messages: 160
+  abnormal_max_sog: 1.0
+  moving_sog_threshold: 2.0
+  min_moving_fraction: 0.30
+  fixed_length: 160
+  require_complete_static: false
+  norm_stats_from: /mnt/storage_1_10T/zezzahed/AIS_Data/fullus2019/processed
+
+encoding:
+  bins: {LAT: 50, LON: 50, SOG: 30, COG: 36, WID: 10, LEN: 20, DRA: 10}
+  use_len: true
+  use_wid: true
+  use_dra: true
+
+model:
+  n_classes: 4
+  conv_channels: [5, 5, 5, 5, 5]
+  conv_kernels: [10, 10, 10, 5, 3]
+  label_embed_dim: 50
+  latent_dim: 20
+  decoder_fc_dim: 250
+
+train:
+  lr: 0.0001
+  batch_size: 512
+  epochs: 50
+  labeled_fraction: 0.20
+  beta: 10.0
+  seed: 42
+  device: cuda
+  num_workers: 16

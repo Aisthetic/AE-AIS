@@ -136,33 +136,67 @@ def _month_from_name(name: str, cfg: PipelineConfig) -> int | None:
         return None
 
 
-def ingest_all(cfg: PipelineConfig) -> Path:
-    """Ingest every raw file, write per-split parquet under paths.interim."""
+def _date_from_name(name: str) -> str:
+    """AIS_2019_01_15.zip -> '2019_01_15'; falls back to stem on parse failure."""
+    parts = name.split("_")
+    try:
+        return f"{parts[1]}_{parts[2]}_{parts[3].split('.')[0]}"
+    except IndexError:
+        return Path(name).stem
+
+
+def _ingest_file_task(args: tuple) -> tuple[str, int] | None:
+    """Worker: ingest one file, write shard to interim/{split}/part_{date}.parquet.
+
+    Returns (split, n_rows) so the parent never holds trajectory data in memory.
+    """
+    path, cfg, out_dir_str = args
+    month = _month_from_name(path.name, cfg)
+    split = _split_for_month(month, cfg) if month else None
+    if split is None:
+        return None
+    df = ingest_file(path, cfg)
+    if df.empty:
+        return None
+    df["split"] = split
+    date_str = _date_from_name(path.name)
+    dest = Path(out_dir_str) / split / f"part_{date_str}.parquet"
+    df.to_parquet(dest, index=False)
+    return split, len(df)
+
+
+def ingest_all(cfg: PipelineConfig, workers: int | None = None) -> Path:
+    """Ingest every raw file in parallel, write per-day shards under paths.interim/{split}/.
+
+    Each worker writes its own shard; the parent accumulates only row counts, never
+    DataFrames, so peak RAM stays proportional to a single daily file (~785 MB CSV
+    decompressed) times n_workers rather than the whole split at once.
+    """
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
     raw_dir = Path(cfg.paths.raw)
     out_dir = Path(cfg.paths.interim)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Pre-create split subdirs to avoid races between workers.
+    for s in ("train", "val", "test"):
+        (out_dir / s).mkdir(exist_ok=True)
+
     files = sorted([*raw_dir.glob("*.zip"), *raw_dir.glob("*.csv")])
     if not files:
         raise FileNotFoundError(f"no raw .zip/.csv files in {raw_dir}")
 
-    buckets: dict[str, list[pd.DataFrame]] = {"train": [], "val": [], "test": []}
-    for path in tqdm(files, desc="ingest", unit="file"):
-        month = _month_from_name(path.name, cfg)
-        split = _split_for_month(month, cfg) if month else None
-        if split is None:
-            tqdm.write(f"skip {path.name}: month {month} not in any split")
-            continue
-        df = ingest_file(path, cfg)
-        if not df.empty:
-            df["split"] = split
-            buckets[split].append(df)
+    n_workers = workers or os.cpu_count() or 4
+    args = [(p, cfg, str(out_dir)) for p in files]
 
-    written = []
-    for split, frames in buckets.items():
-        if not frames:
-            continue
-        combined = pd.concat(frames, ignore_index=True)
-        dest = out_dir / f"clean_{split}.parquet"
-        combined.to_parquet(dest, index=False)
-        written.append(dest)
+    counts: dict[str, int] = {"train": 0, "val": 0, "test": 0}
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = {pool.submit(_ingest_file_task, a): a[0] for a in args}
+        for fut in tqdm(as_completed(futures), total=len(futures), desc="ingest", unit="file"):
+            result = fut.result()
+            if result is not None:
+                split, n = result
+                counts[split] += n
+
+    tqdm.write(f"ingest complete — rows per split: {counts}")
     return out_dir

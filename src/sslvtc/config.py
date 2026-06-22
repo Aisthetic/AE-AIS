@@ -77,6 +77,11 @@ class ExtractionConfig:
     moving_sog_threshold: float = 2.0   # Step 3: "moving" defined as SOG > 2 kn
     min_moving_fraction: float = 0.30   # Step 3: drop if moving fraction <= 30%
     fixed_length: int = 160             # Step 5: subsample to this many messages
+    require_complete_static: bool = False  # drop trajectories missing any LEN/WID/DRA
+                                           # (reproduces paper's static-complete selection)
+    norm_stats_from: str | None = None     # reuse normalization_stats.json + static_means.json
+                                           # from this processed dir instead of recomputing
+                                           # (for cross-cohort eval with matched normalization)
 
 
 @dataclass(frozen=True)
@@ -113,11 +118,23 @@ class EncodingConfig:
 @dataclass(frozen=True)
 class ModelConfig:
     n_classes: int = 4
-    conv_channels: tuple[int, ...] = (5, 5, 5, 5, 5)   # output channels per conv layer
+    # --- CNN backbone (default, paper-exact) ---
+    conv_channels: tuple[int, ...] = (5, 5, 5, 5, 5)
     conv_kernels: tuple[int, ...] = (10, 10, 10, 5, 3)
     label_embed_dim: int = 50
     latent_dim: int = 20
-    decoder_fc_dim: int = 250  # paper reshape target
+    decoder_fc_dim: int = 250
+    # --- Backbone selector ---
+    backbone: str = "sevenhot_cnn"   # "sevenhot_cnn" | "temporal_transformer"
+    # --- Temporal Transformer (Phase 2.1) ---
+    tf_d_model: int = 64
+    tf_nhead: int = 4
+    tf_nlayers: int = 2
+    tf_dropout: float = 0.1
+    # --- Phase 2.3 debiasing ---
+    static_dropout_prob: float = 0.0  # training-time per-sample static channel dropout
+    gr_weight: float = 0.0            # gradient reversal MMSI-head weight (0 = disabled)
+    n_mmsi_buckets: int = 128         # hash MMSIs into N buckets for GR head
 
 
 @dataclass(frozen=True)
@@ -130,6 +147,13 @@ class TrainConfig:
     seed: int = 42
     device: str = "auto"               # auto -> mps/cuda/cpu
     num_workers: int = 0
+    ema_decay: float | None = 0.999    # EMA shadow model decay; None to disable
+    patience: int = 15                 # early-stop on val macro-F1; 0 to disable
+    min_epochs_before_stop: int = 30   # warmup floor: never early-stop before this epoch
+                                       # (low-label SSL warms up slowly; avoids killing it)
+    lr_schedule: str = "cosine"        # "cosine" | "none"
+    consistency_weight: float = 0.0   # Phase 2.2 FixMatch-style consistency weight; 0 = disabled
+    consistency_threshold: float = 0.95  # pseudo-label confidence threshold
 
 
 @dataclass(frozen=True)

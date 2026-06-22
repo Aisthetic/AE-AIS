@@ -75,6 +75,36 @@ def classifier_loss(model: SSLVTC, x: torch.Tensor, y: torch.Tensor) -> torch.Te
     return F.cross_entropy(logits, y, reduction="mean")
 
 
+def consistency_loss(
+    model: SSLVTC,
+    x_unlab: torch.Tensor,
+    *,
+    threshold: float = 0.95,
+    augment_fn=None,
+    mode: str = "sevenhot",
+) -> torch.Tensor:
+    """FixMatch-style consistency: pseudo-labels from weak aug, CE on strong aug.
+
+    Returns scalar loss (0 if no confident pseudo-labels above threshold).
+    """
+    from .augmentations import weak_augment, strong_augment
+    aug_fn = augment_fn or (lambda x: strong_augment(x, mode=mode))
+
+    with torch.no_grad():
+        weak_x = weak_augment(x_unlab, mode=mode)
+        logits_weak = model.classifier(weak_x)
+        probs = F.softmax(logits_weak, dim=1)
+        max_prob, pseudo_labels = probs.max(dim=1)
+        mask = max_prob >= threshold
+
+    if mask.sum() == 0:
+        return torch.zeros(1, device=x_unlab.device).squeeze()
+
+    strong_x = aug_fn(x_unlab[mask])
+    logits_strong = model.classifier(strong_x)
+    return F.cross_entropy(logits_strong, pseudo_labels[mask], reduction="mean")
+
+
 def total_loss(
     model: SSLVTC,
     x_lab: torch.Tensor,

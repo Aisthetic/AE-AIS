@@ -102,11 +102,12 @@ def seven_hot_from_matrix(
     missing_static_fill: str | None = None,
     static_means: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """Raw [T,7] -> seven-hot [T, D] over the config's active attributes."""
-    matrix = _filled(matrix, cfg, missing_static_fill, static_means)
+    """Raw [T,7(+)] -> seven-hot [T, D] over the config's active attributes."""
+    matrix7 = matrix[:, :7]  # ignore Δt col if present
+    matrix7 = _filled(matrix7, cfg, missing_static_fill, static_means)
     blocks = []
     for attr in cfg.active_attrs():
-        col = matrix[:, _ATTR_INDEX[attr]]
+        col = matrix7[:, _ATTR_INDEX[attr]]
         blocks.append(_one_hot_bins(col, cfg.bins[attr]))
     return np.concatenate(blocks, axis=1).astype("float32")
 
@@ -118,11 +119,35 @@ def raw_from_matrix(
     missing_static_fill: str | None = "zero",
     static_means: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """Raw [T,7] -> [T, n_active] real-valued features (NaN filled). Baseline input."""
-    matrix = _filled(matrix, cfg, missing_static_fill, static_means)
-    cols = [matrix[:, _ATTR_INDEX[a]] for a in cfg.active_attrs()]
+    """Raw [T,7(+)] -> [T, n_active] real-valued features (NaN filled). Baseline input."""
+    matrix7 = matrix[:, :7]  # ignore Δt col if present
+    matrix7 = _filled(matrix7, cfg, missing_static_fill, static_means)
+    cols = [matrix7[:, _ATTR_INDEX[a]] for a in cfg.active_attrs()]
     out = np.stack(cols, axis=1).astype("float32")
     return np.nan_to_num(out, nan=0.0)
+
+
+def raw_dt_from_matrix(
+    matrix: np.ndarray,
+    cfg: EncodingConfig,
+    *,
+    missing_static_fill: str | None = "zero",
+    static_means: dict[str, float] | None = None,
+) -> np.ndarray:
+    """Raw [T,8] -> [T, n_active+1] including the Δt channel (col 7).
+
+    Used by the temporal transformer backbone. If matrix has only 7 cols (old
+    tensors), returns raw_from_matrix with a zero Δt appended.
+    """
+    if matrix.shape[1] < 8:
+        base = raw_from_matrix(matrix, cfg, missing_static_fill=missing_static_fill,
+                                static_means=static_means)
+        dt_col = np.zeros((base.shape[0], 1), dtype="float32")
+        return np.concatenate([base, dt_col], axis=1)
+    base = raw_from_matrix(matrix[:, :7], cfg, missing_static_fill=missing_static_fill,
+                            static_means=static_means)
+    dt_col = matrix[:, 7:8].astype("float32")
+    return np.concatenate([base, dt_col], axis=1)
 
 
 def compute_static_means(matrices: list[np.ndarray]) -> dict[str, float]:
