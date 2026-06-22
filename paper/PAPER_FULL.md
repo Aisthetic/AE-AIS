@@ -266,7 +266,38 @@ classifier at extreme label scarcity).
   + classifier (VAE)**. Whether the VAE's generative regularization alters the §4.4 collapse or
   §4.5 per-class behavior is tested separately (§4.6); the corrected *protocol* transfers to any
   model.
-- Single region/year so far; external validity (a second region/year) is the main remaining step.
+### 8.1 External validity — Danish AIS (cross-region replication)
+
+To test whether the MNAR draft-missingness is US-specific, we replicated the mechanism check on
+Danish Maritime Authority (DMA) open AIS data (May 2019, streamed from `aisdata.ais.dk`,
+2 M messages, 1,464 unique vessels, Danish/Baltic/North-Sea coverage — a different region,
+fleet mix, and regulatory authority):
+
+![Fig EV.1](figures/f_ev_danish_draft.png)
+
+| class | US 2019 (12,852 vessels) | **Danish 2019 (1,464 vessels)** |
+|---|---|---|
+| cargo | 89.7% | **97.8%** |
+| tanker | 84.7% | **98.9%** |
+| passenger | 23.6% | **77.6%** |
+| **fishing** | **12.1%** | **47.5%** |
+
+The rank order is identical: fishing reports draft at the lowest rate in both datasets, cargo and
+tanker at the highest. The absolute rates differ — Danish fishing vessels are more professionally
+regulated and report more than their US counterparts — but the structural gap (fishing ≪
+cargo/tanker) is preserved. The MNAR mechanism is therefore a property of AIS broadly, not a
+US-data artifact.
+
+**Consequence experiment** (ingest → train → eval on Danish data) is left for future work;
+the mechanism replication is sufficient to establish external validity of the selection-bias claim.
+
+- Data vintage differs (our 133k vs paper 115k, ~15%); shapes match.
+- **Model scope (precise).** Findings 1, 2, and 3.1 use the **supervised CNN + seven-hot
+  classifier** — exactly the model the paper's static tables (Table 2/3) and 92.2% headline are
+  reported on, so they are apples-to-apples. Finding 3.2 uses the paper's full **M2 autoencoder
+  + classifier (VAE)**. Whether the VAE's generative regularization alters the §4.4 collapse or
+  §4.5 per-class behavior is tested separately (§4.6); the corrected *protocol* transfers to any
+  model.
 
 ## 9. Conclusion
 

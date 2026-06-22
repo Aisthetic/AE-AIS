@@ -187,8 +187,28 @@ def f3_ssl():
     fig.tight_layout(); fig.savefig(FIG / "f3_2_ssl.png"); plt.close(fig)
 
 
+def f_ev_danish_draft():
+    classes = ["cargo", "tanker", "passenger", "fishing"]
+    us     = [89.7, 84.7, 23.6, 12.1]
+    danish = [97.8, 98.9, 77.6, 47.5]
+    x = np.arange(len(classes)); w = 0.38
+    fig, ax = plt.subplots(figsize=(7, 4.2))
+    ax.bar(x - w/2, us,     w, label="US 2019 (12,852 vessels)",    color=[C[c] for c in classes], alpha=0.55)
+    ax.bar(x + w/2, danish, w, label="Danish 2019 (1,464 vessels)", color=[C[c] for c in classes])
+    for i, (u, d) in enumerate(zip(us, danish)):
+        ax.text(x[i]-w/2, u+1.5, f"{u}%", ha="center", fontsize=9, alpha=0.75)
+        ax.text(x[i]+w/2, d+1.5, f"{d}%", ha="center", fontsize=9)
+    ax.set_xticks(x); ax.set_xticklabels(classes)
+    ax.set_ylabel("% of vessels that ever report Draught")
+    ax.set_ylim(0, 110)
+    ax.set_title("Fig EV.1  MNAR replicates in Danish/Baltic AIS\n"
+                 "Fishing lowest in both regions — structural gap vs cargo/tanker preserved")
+    ax.legend(fontsize=9)
+    fig.tight_layout(); fig.savefig(FIG / "f_ev_danish_draft.png"); plt.close(fig)
+
+
 if __name__ == "__main__":
     for fn in [f1_distribution, f1_draft, f1_kept, f1_consequence, f1_perclass, f2_leakage,
-               f2_nocollapse, f2_fishing, f3_bins, f3_ssl]:
+               f2_nocollapse, f2_fishing, f3_bins, f3_ssl, f_ev_danish_draft]:
         fn(); print("wrote", fn.__name__)
     print("done ->", FIG)
