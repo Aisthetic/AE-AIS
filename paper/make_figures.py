@@ -207,8 +207,36 @@ def f_ev_danish_draft():
     fig.tight_layout(); fig.savefig(FIG / "f_ev_danish_draft.png"); plt.close(fig)
 
 
+def f_datasets():
+    """Overview of the datasets/cohorts used in the study."""
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(8.6, 4.0))
+
+    # Left: US 2019 cohorts (trajectory counts) — the static-complete filter halves the data
+    cohorts = ["Inclusive\n(all vessels)", "Complete\n(static-only)"]
+    traj = [260543, 133492]
+    bars = axL.bar(cohorts, traj, color=["#2ca02c", "#1f77b4"], width=0.6)
+    for b, v in zip(bars, traj):
+        axL.text(b.get_x()+b.get_width()/2, v+5000, f"{v:,}", ha="center", fontsize=9.5)
+    axL.set_ylabel("trajectories")
+    axL.set_ylim(0, 295000)
+    axL.set_title("US MarineCadastre 2019\n12,852 vessels, 210.8M messages, Jan-Jun")
+
+    # Right: cross-region scale (unique vessels), US vs Danish
+    regions = ["US 2019\n(US/Can/Mex)", "Danish 2019\n(Baltic/N.Sea)"]
+    vessels = [12852, 1464]
+    bars2 = axR.bar(regions, vessels, color=["#1f77b4", "#ff7f0e"], width=0.6)
+    for b, v in zip(bars2, vessels):
+        axR.text(b.get_x()+b.get_width()/2, v+250, f"{v:,}", ha="center", fontsize=9.5)
+    axR.set_ylabel("unique vessels")
+    axR.set_ylim(0, 15000)
+    axR.set_title("Cross-region external validity\nDanish DMA AIS, May 2019, 2M messages")
+
+    fig.suptitle("Datasets and cohorts used in this study", fontsize=12, y=1.02)
+    fig.tight_layout(); fig.savefig(FIG / "f_datasets.png", bbox_inches="tight"); plt.close(fig)
+
+
 if __name__ == "__main__":
     for fn in [f1_distribution, f1_draft, f1_kept, f1_consequence, f1_perclass, f2_leakage,
-               f2_nocollapse, f2_fishing, f3_bins, f3_ssl, f_ev_danish_draft]:
+               f2_nocollapse, f2_fishing, f3_bins, f3_ssl, f_ev_danish_draft, f_datasets]:
         fn(); print("wrote", fn.__name__)
     print("done ->", FIG)
