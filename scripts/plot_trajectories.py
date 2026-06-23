@@ -35,6 +35,64 @@ def _denorm(col: np.ndarray, lo: float, hi: float) -> np.ndarray:
     return col * (hi - lo) + lo
 
 
+def _build_land_mask(extent: list[float]) -> object:
+    """Return a prepared shapely geometry covering land within the extent."""
+    import shapely
+    import shapely.prepared
+    import cartopy.io.shapereader as shpreader
+    from shapely.geometry import box
+
+    shpfile = shpreader.natural_earth(resolution="50m", category="physical", name="land")
+    reader  = shpreader.Reader(shpfile)
+    clip    = box(extent[0], extent[2], extent[1], extent[3])
+    polys   = [g.geometry for g in reader.records()
+               if g.geometry.intersects(clip)]
+    land    = shapely.unary_union(polys)
+    return shapely.prepared.prep(land)
+
+
+def _filter_jumps(cls_arrays: dict, max_step_deg: float = 2.0) -> dict:
+    """Drop trajectories with any consecutive step > max_step_deg (GPS teleport artifacts)."""
+    out = {}
+    for cls, lonlat in cls_arrays.items():
+        if len(lonlat) == 0:
+            out[cls] = lonlat
+            continue
+        # diff along time axis; shape [N, T-1, 2]
+        steps = np.abs(np.diff(lonlat.astype("float32"), axis=1))
+        bad = (steps > max_step_deg).any(axis=(1, 2))
+        out[cls] = lonlat[~bad]
+        if bad.sum():
+            print(f"  {cls}: dropped {bad.sum():,} jump artifacts; {(~bad).sum():,} kept")
+    return out
+
+
+def _filter_ocean_only(cls_arrays: dict, land, threshold: float = 0.20) -> dict:
+    """Drop trajectories where > threshold fraction of points fall on land.
+
+    A threshold < 1.0 tolerates port-area points that register as land at 50 m
+    resolution, while still removing trajectories that genuinely cross inland.
+    """
+    import shapely
+    out = {}
+    for cls, lonlat in cls_arrays.items():
+        if len(lonlat) == 0:
+            out[cls] = lonlat
+            continue
+        N, T, _ = lonlat.shape
+        lons = lonlat[:, :, 0].ravel().astype("float64")
+        lats = lonlat[:, :, 1].ravel().astype("float64")
+        on_land = shapely.contains_xy(land.context, lons, lats).reshape(N, T)
+        land_frac = on_land.mean(axis=1)          # fraction of points on land per traj
+        keep = land_frac <= threshold
+        out[cls] = lonlat[keep]
+        dropped = N - keep.sum()
+        if dropped:
+            print(f"  {cls}: dropped {dropped:,} inland trajectories "
+                  f"(>{threshold:.0%} pts on land); {keep.sum():,} kept")
+    return out
+
+
 def _load_region(processed: Path, stride: int) -> dict[str, np.ndarray]:
     """Return {cls: float32 array [N, T//stride, 2]} (lat, lon) for all trajectories."""
     index = pd.read_parquet(processed / "index.parquet")
@@ -160,6 +218,12 @@ def main():
         print(f"Loading {name}...")
         cls_arrays = _load_region(Path(proc), args.stride)
         extent = _get_extent(name)
+        print(f"  Filtering GPS jump artifacts...")
+        cls_arrays = _filter_jumps(cls_arrays)
+        print(f"  Building land mask for {name}...")
+        land = _build_land_mask(extent)
+        print(f"  Filtering land-crossing trajectories...")
+        cls_arrays = _filter_ocean_only(cls_arrays, land, threshold=0.05)
         all_data.append((name, cls_arrays, extent))
 
     if has_cartopy:
