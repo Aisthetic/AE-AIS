@@ -1,0 +1,7 @@
+% ieee-comp.cbx — stub for TeXLive < 2025
+% ieee-comp differs from ieee only in using [7]–[9] range delimiters.
+% On TexLive 2022 the ieee style already compresses runs acceptably.
+\ProvidesFile{ieee-comp.cbx}[2024/01/01 v1.0 ieee-comp stub (delegates to ieee)]
+\RequireCitationStyle{ieee}
+% Use [7]–[9] style for compressed ranges, matching IARIA requirement.
+\renewcommand*{\multiciterangedelim}{\bibclosebracket\bibrangedash\bibopenbracket}
