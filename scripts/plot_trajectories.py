@@ -1,15 +1,11 @@
-"""Plot sampled vessel trajectories on their geographic regions, colored by class.
+"""Plot ALL vessel trajectories on their geographic regions, colored by class.
 
-Reads the extracted cohort (index.parquet + tensors/*.npy + normalization_stats.json)
-produced by `sslvtc` extraction, un-normalizes LAT/LON back to degrees, samples a few
-trajectories per class, and draws them as polylines on a cartopy map per region.
-
-Run on the machine that holds the processed data (the cluster), e.g.:
+Uses packed_all.npy + LineCollection for fast loading and rendering of the full cohort.
 
     python scripts/plot_trajectories.py \
         --region "US 2019"     /mnt/storage_1_10T/zezzahed/AIS_Data/fullus2019/processed \
         --region "Danish 2019" /mnt/storage_1_10T/zezzahed/AIS_Data/danishais2019/processed \
-        --per-class 40 --out paper/figures/f_traj_maps.png
+        --out paper/figures/f_traj_maps.png
 
 Then copy paper/figures/f_traj_maps.png into overleaf/figures/ and recompile.
 """
@@ -21,16 +17,14 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.collections as mcoll
 import numpy as np
 import pandas as pd
 
-# More saturated palette; draw order puts rarer/smaller classes on top
 C      = {"cargo": "#1a6faf", "tanker": "#e07b00", "passenger": "#1a9641", "fishing": "#d7191c"}
 ZORDER = {"cargo": 4, "tanker": 5, "passenger": 6, "fishing": 7}
 CLASSES = ["cargo", "tanker", "passenger", "fishing"]
 
-# Hard-coded extents [lon_min, lon_max, lat_min, lat_max] per region name prefix.
-# US data normalization range spans lon -180..+154 (global); clip to conus+gulf.
 EXTENTS = {
     "us":     [-130.0, -60.0,  18.0, 52.0],
     "danish": [   7.0,  16.5,  53.5, 58.8],
@@ -41,55 +35,68 @@ def _denorm(col: np.ndarray, lo: float, hi: float) -> np.ndarray:
     return col * (hi - lo) + lo
 
 
-def _load_region(processed: Path, per_class: int, rng: np.random.Generator):
-    """Return list of (label, lat[], lon[]) for sampled trajectories."""
+def _load_region(processed: Path, stride: int) -> dict[str, np.ndarray]:
+    """Return {cls: float32 array [N, T//stride, 2]} (lat, lon) for all trajectories."""
     index = pd.read_parquet(processed / "index.parquet")
     stats = json.loads((processed / "normalization_stats.json").read_text())
     lat_lo, lat_hi = stats["LAT"]["min"], stats["LAT"]["max"]
     lon_lo, lon_hi = stats["LON"]["min"], stats["LON"]["max"]
 
+    # packed_all.npy: [total_trajs, T, 8]; packed_all_ids.json: {traj_id: row_idx}
+    packed = np.load(processed / "packed_all.npy", mmap_mode="r")
+    id_map = json.loads((processed / "packed_all_ids.json").read_text())
+
     label_col = "label" if "label" in index.columns else "label_idx"
-    out = []
+    out: dict[str, list] = {c: [] for c in CLASSES}
+
     for cls in CLASSES:
         sub = index[index[label_col].astype(str).str.lower() == cls]
         if len(sub) == 0:
             continue
-        take = sub.sample(min(per_class, len(sub)), random_state=int(rng.integers(1e9)))
-        for _, row in take.iterrows():
-            arr = np.load(processed / row["path"])  # [T, 8], normalized
-            lat = _denorm(arr[:, 0].astype("float64"), lat_lo, lat_hi)
-            lon = _denorm(arr[:, 1].astype("float64"), lon_lo, lon_hi)
-            out.append((cls, lat, lon))
+        rows = [id_map[tid] for tid in sub["traj_id"].astype(str) if tid in id_map]
+        if not rows:
+            continue
+        # vectorized load: [N, T, 8]
+        block = packed[rows, ::stride, :]
+        lat = (_denorm(block[:, :, 0].astype("float64"), lat_lo, lat_hi)).astype("float32")
+        lon = (_denorm(block[:, :, 1].astype("float64"), lon_lo, lon_hi)).astype("float32")
+        out[cls] = np.stack([lon, lat], axis=-1)  # [N, T', 2]
+        print(f"  {cls}: {len(rows):,} trajectories")
+
     return out
 
 
-def _get_extent(name: str, trajs: list) -> list[float]:
-    """Return [lon_min, lon_max, lat_min, lat_max]: named override or data bounds + 5% pad."""
+def _get_extent(name: str) -> list[float]:
     key = name.lower().split()[0]
-    if key in EXTENTS:
-        return EXTENTS[key]
-    lats = np.concatenate([t[1] for t in trajs])
-    lons = np.concatenate([t[2] for t in trajs])
-    lo, la = np.nanmin(lons), np.nanmin(lats)
-    hi, ha = np.nanmax(lons), np.nanmax(lats)
-    pw, ph = (hi - lo) * 0.05, (ha - la) * 0.05
-    return [lo - pw, hi + pw, la - ph, ha + ph]
+    return EXTENTS.get(key, None)
 
 
-def _alpha_lw(extent: list[float]) -> tuple[float, float]:
-    """Scale alpha and lw with extent area so large/small panels look equally dense."""
+def _alpha_lw(extent: list[float], n_trajs: int) -> tuple[float, float]:
+    """Per-panel alpha: scales with area and inversely with trajectory count."""
     lon_min, lon_max, lat_min, lat_max = extent
     area = (lon_max - lon_min) * (lat_max - lat_min)
-    # Danish ~50 sq-deg → anchor: alpha=0.18, lw=0.55
-    # US    ~2380 sq-deg → scales up by sqrt ratio ≈ 6.9x → alpha≈0.45 (capped), lw≈0.9
-    ref = 50.0
-    ratio = (area / ref) ** 0.5
-    alpha = min(0.55, 0.18 * ratio)
-    lw    = min(1.1,  0.55 * ratio ** 0.4)
+    # target: ~5 overlapping trajectories per pixel = readable lanes
+    # alpha s.t. 1-(1-alpha)^5 ≈ 0.5  →  alpha ≈ 0.13; scale by sqrt(area/n)
+    ref_density = 500 / 50.0  # trajs per sq-deg at reference Danish 500-sample setting
+    density = n_trajs / area
+    alpha = min(0.50, max(0.015, 0.13 * (ref_density / density) ** 0.5))
+    lw = min(1.0, max(0.4, 0.55 * (area / 50.0) ** 0.25))
     return alpha, lw
 
 
-def _draw_panel_cartopy(fig, pos, trajs, title, extent):
+def _make_segments(lonlat: np.ndarray, lon_min, lon_max, lat_min, lat_max):
+    """Convert [N, T, 2] to list of (M,2) arrays clipped to extent, one per trajectory."""
+    segs = []
+    for traj in lonlat:
+        lon, lat = traj[:, 0], traj[:, 1]
+        mask = (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
+        if mask.sum() < 2:
+            continue
+        segs.append(traj[mask])
+    return segs
+
+
+def _draw_panel_cartopy(fig, pos, cls_arrays: dict, title: str, extent: list[float]):
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
 
@@ -97,75 +104,46 @@ def _draw_panel_cartopy(fig, pos, trajs, title, extent):
     ax = fig.add_subplot(pos, projection=proj)
     ax.set_extent(extent, crs=proj)
 
-    ax.add_feature(cfeature.OCEAN, facecolor="#d6eaf8", zorder=0)
-    ax.add_feature(cfeature.LAND,  facecolor="#eaecee", zorder=1)
+    ax.add_feature(cfeature.OCEAN,     facecolor="#d6eaf8", zorder=0)
+    ax.add_feature(cfeature.LAND,      facecolor="#eaecee", zorder=1)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5, edgecolor="#555", zorder=2)
     ax.add_feature(cfeature.BORDERS,   linewidth=0.3, edgecolor="#999", zorder=2)
     ax.add_feature(cfeature.LAKES,     facecolor="#d6eaf8", linewidth=0.2, zorder=2)
 
-    lon_min, lon_max, lat_min, lat_max = extent
-    # gridlines with labels
     gl = ax.gridlines(draw_labels=True, linewidth=0.3, color="#aaa", alpha=0.6, zorder=3)
     gl.top_labels = False
     gl.right_labels = False
     gl.xlabel_style = {"size": 7}
     gl.ylabel_style = {"size": 7}
 
-    alpha, lw = _alpha_lw(extent)
-    # draw in zorder so rarer classes paint on top; low alpha accumulates density
-    for cls in CLASSES:
-        for c, lat, lon in trajs:
-            if c != cls:
-                continue
-            mask = (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
-            if mask.sum() < 2:
-                continue
-            ax.plot(lon[mask], lat[mask], lw=lw, alpha=alpha, color=C[cls],
-                    transform=proj, zorder=ZORDER[cls])
-
-    # legend — thicker line so color reads at small size
-    handles = [plt.Line2D([0], [0], color=C[c], lw=2.5, label=c.capitalize(),
-                          alpha=0.9)
-               for c in CLASSES if any(t[0] == c for t in trajs)]
-    ax.legend(handles=handles, fontsize=7, loc="lower left",
-              framealpha=0.9, edgecolor="#bbb")
-    ax.set_title(title, fontsize=10, pad=4)
-    return ax
-
-
-def _draw_panel_fallback(ax, trajs, title, extent):
-    """No-cartopy fallback: plain lon/lat with aspect correction."""
     lon_min, lon_max, lat_min, lat_max = extent
-    alpha, lw = _alpha_lw(extent)
+    n_total = sum(len(v) for v in cls_arrays.values() if len(v))
+    alpha, lw = _alpha_lw(extent, n_total)
+
     for cls in CLASSES:
-        for c, lat, lon in trajs:
-            if c != cls:
-                continue
-            mask = (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
-            if mask.sum() < 2:
-                continue
-            ax.plot(lon[mask], lat[mask], lw=lw, alpha=alpha, color=C[cls],
-                    zorder=ZORDER[cls])
+        lonlat = cls_arrays.get(cls)
+        if lonlat is None or len(lonlat) == 0:
+            continue
+        segs = _make_segments(lonlat, lon_min, lon_max, lat_min, lat_max)
+        if not segs:
+            continue
+        lc = mcoll.LineCollection(segs, colors=C[cls], linewidths=lw, alpha=alpha,
+                                  transform=proj, zorder=ZORDER[cls])
+        ax.add_collection(lc)
 
     handles = [plt.Line2D([0], [0], color=C[c], lw=2.5, label=c.capitalize(), alpha=0.9)
-               for c in CLASSES if any(t[0] == c for t in trajs)]
-    ax.legend(handles=handles, fontsize=7, loc="lower left")
-    ax.set_xlim(lon_min, lon_max)
-    ax.set_ylim(lat_min, lat_max)
-    mid_lat = (lat_min + lat_max) / 2
-    ax.set_aspect(1.0 / np.cos(np.deg2rad(mid_lat)))
-    ax.set_xlabel("Longitude", fontsize=8)
-    ax.set_ylabel("Latitude", fontsize=8)
-    ax.set_title(title, fontsize=10)
-    ax.grid(True, alpha=0.3, linewidth=0.4)
+               for c in CLASSES if len(cls_arrays.get(c, [])) > 0]
+    ax.legend(handles=handles, fontsize=7, loc="lower left", framealpha=0.9, edgecolor="#bbb")
+    ax.set_title(title, fontsize=10, pad=4)
+    return ax
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--region", nargs=2, action="append", metavar=("NAME", "PROCESSED_DIR"),
                    required=True)
-    p.add_argument("--per-class", type=int, default=500)
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--stride", type=int, default=4,
+                   help="timestep stride (4 → every 4th point, reduces 160→40 pts/traj)")
     p.add_argument("--out", type=Path, default=Path("paper/figures/f_traj_maps.png"))
     args = p.parse_args()
 
@@ -174,32 +152,25 @@ def main():
         has_cartopy = True
     except ImportError:
         has_cartopy = False
+        print("WARNING: cartopy not found, falling back to plain axes (no coastlines)")
 
-    rng = np.random.default_rng(args.seed)
     n = len(args.region)
-
-    # Load all regions first so we know extents
-    all_trajs = []
-    all_extents = []
+    all_data = []
     for name, proc in args.region:
-        trajs = _load_region(Path(proc), args.per_class, rng)
-        extent = _get_extent(name, trajs)
-        all_trajs.append((name, trajs))
-        all_extents.append(extent)
+        print(f"Loading {name}...")
+        cls_arrays = _load_region(Path(proc), args.stride)
+        extent = _get_extent(name)
+        all_data.append((name, cls_arrays, extent))
 
     if has_cartopy:
-        fig = plt.figure(figsize=(5.2 * n, 4.6))
-        for i, ((name, trajs), extent) in enumerate(zip(all_trajs, all_extents)):
-            pos = int(f"1{n}{i+1}")  # e.g. 121, 122
-            ax = _draw_panel_cartopy(fig, pos, trajs, name, extent)
+        fig = plt.figure(figsize=(5.5 * n, 4.8))
+        for i, (name, cls_arrays, extent) in enumerate(all_data):
+            pos = int(f"1{n}{i+1}")
+            _draw_panel_cartopy(fig, pos, cls_arrays, name, extent)
     else:
-        fig, axes = plt.subplots(1, n, figsize=(5.2 * n, 4.6))
-        if n == 1:
-            axes = [axes]
-        for ax, (name, trajs), extent in zip(axes, all_trajs, all_extents):
-            _draw_panel_fallback(ax, trajs, name, extent)
+        raise RuntimeError("cartopy required; install with: pip install cartopy")
 
-    fig.suptitle("Sampled vessel trajectories by class", fontsize=12, y=1.01)
+    fig.suptitle("Vessel trajectories by class (full cohort)", fontsize=12, y=1.01)
     fig.tight_layout()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, bbox_inches="tight", dpi=150)
