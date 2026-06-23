@@ -16,6 +16,7 @@ from pathlib import Path
 URL          = "http://aisdata.ais.dk/2019/aisdk-2019-05.zip"
 TARGET_ROWS  = 2_000_000
 CHUNK        = 10 * 1024 * 1024  # 10 MB per range request
+DATA_DIR     = Path("/mnt/storage_1_10T/zezzahed/AIS_Data/external/danishais_raw")
 OUT_CSV      = Path("paper/external_validity_danish.csv")
 
 TEXT2CLS = {
