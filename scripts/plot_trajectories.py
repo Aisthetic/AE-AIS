@@ -24,8 +24,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# class colors match paper/make_figures.py
-C = {"cargo": "#1f77b4", "tanker": "#ff7f0e", "passenger": "#2ca02c", "fishing": "#d62728"}
+# More saturated palette; draw order puts rarer/smaller classes on top
+C      = {"cargo": "#1a6faf", "tanker": "#e07b00", "passenger": "#1a9641", "fishing": "#d7191c"}
+ZORDER = {"cargo": 4, "tanker": 5, "passenger": 6, "fishing": 7}
 CLASSES = ["cargo", "tanker", "passenger", "fishing"]
 
 # Hard-coded extents [lon_min, lon_max, lat_min, lat_max] per region name prefix.
@@ -75,6 +76,19 @@ def _get_extent(name: str, trajs: list) -> list[float]:
     return [lo - pw, hi + pw, la - ph, ha + ph]
 
 
+def _alpha_lw(extent: list[float]) -> tuple[float, float]:
+    """Scale alpha and lw with extent area so large/small panels look equally dense."""
+    lon_min, lon_max, lat_min, lat_max = extent
+    area = (lon_max - lon_min) * (lat_max - lat_min)
+    # Danish ~50 sq-deg → anchor: alpha=0.18, lw=0.55
+    # US    ~2380 sq-deg → scales up by sqrt ratio ≈ 6.9x → alpha≈0.45 (capped), lw≈0.9
+    ref = 50.0
+    ratio = (area / ref) ** 0.5
+    alpha = min(0.55, 0.18 * ratio)
+    lw    = min(1.1,  0.55 * ratio ** 0.4)
+    return alpha, lw
+
+
 def _draw_panel_cartopy(fig, pos, trajs, title, extent):
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
@@ -97,19 +111,24 @@ def _draw_panel_cartopy(fig, pos, trajs, title, extent):
     gl.xlabel_style = {"size": 7}
     gl.ylabel_style = {"size": 7}
 
-    for cls, lat, lon in trajs:
-        # clip to extent so cartopy doesn't try to wrap across antimeridian
-        mask = (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
-        if mask.sum() < 2:
-            continue
-        ax.plot(lon[mask], lat[mask], lw=0.5, alpha=0.55, color=C[cls],
-                transform=proj, zorder=4)
+    alpha, lw = _alpha_lw(extent)
+    # draw in zorder so rarer classes paint on top; low alpha accumulates density
+    for cls in CLASSES:
+        for c, lat, lon in trajs:
+            if c != cls:
+                continue
+            mask = (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
+            if mask.sum() < 2:
+                continue
+            ax.plot(lon[mask], lat[mask], lw=lw, alpha=alpha, color=C[cls],
+                    transform=proj, zorder=ZORDER[cls])
 
-    # legend
-    handles = [plt.Line2D([0], [0], color=C[c], lw=2, label=c.capitalize())
+    # legend — thicker line so color reads at small size
+    handles = [plt.Line2D([0], [0], color=C[c], lw=2.5, label=c.capitalize(),
+                          alpha=0.9)
                for c in CLASSES if any(t[0] == c for t in trajs)]
     ax.legend(handles=handles, fontsize=7, loc="lower left",
-              framealpha=0.85, edgecolor="#ccc")
+              framealpha=0.9, edgecolor="#bbb")
     ax.set_title(title, fontsize=10, pad=4)
     return ax
 
@@ -117,13 +136,18 @@ def _draw_panel_cartopy(fig, pos, trajs, title, extent):
 def _draw_panel_fallback(ax, trajs, title, extent):
     """No-cartopy fallback: plain lon/lat with aspect correction."""
     lon_min, lon_max, lat_min, lat_max = extent
-    for cls, lat, lon in trajs:
-        mask = (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
-        if mask.sum() < 2:
-            continue
-        ax.plot(lon[mask], lat[mask], lw=0.5, alpha=0.55, color=C[cls])
+    alpha, lw = _alpha_lw(extent)
+    for cls in CLASSES:
+        for c, lat, lon in trajs:
+            if c != cls:
+                continue
+            mask = (lon >= lon_min) & (lon <= lon_max) & (lat >= lat_min) & (lat <= lat_max)
+            if mask.sum() < 2:
+                continue
+            ax.plot(lon[mask], lat[mask], lw=lw, alpha=alpha, color=C[cls],
+                    zorder=ZORDER[cls])
 
-    handles = [plt.Line2D([0], [0], color=C[c], lw=2, label=c.capitalize())
+    handles = [plt.Line2D([0], [0], color=C[c], lw=2.5, label=c.capitalize(), alpha=0.9)
                for c in CLASSES if any(t[0] == c for t in trajs)]
     ax.legend(handles=handles, fontsize=7, loc="lower left")
     ax.set_xlim(lon_min, lon_max)
@@ -140,7 +164,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--region", nargs=2, action="append", metavar=("NAME", "PROCESSED_DIR"),
                    required=True)
-    p.add_argument("--per-class", type=int, default=40)
+    p.add_argument("--per-class", type=int, default=500)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", type=Path, default=Path("paper/figures/f_traj_maps.png"))
     args = p.parse_args()
