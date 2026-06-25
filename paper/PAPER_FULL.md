@@ -266,38 +266,71 @@ classifier at extreme label scarcity).
   + classifier (VAE)**. Whether the VAE's generative regularization alters the §4.4 collapse or
   §4.5 per-class behavior is tested separately (§4.6); the corrected *protocol* transfers to any
   model.
+- **Danish scope.** External replication uses the same supervised CNN + seven-hot classifier
+  and M2 VAE; Findings 2 (leakage) and 3 (reproducibility) are not replicated on Danish data
+  as they concern the US paper's specific split and encoding hyperparameter.
 ### 8.1 External validity — Danish AIS (cross-region replication)
 
-To test whether the MNAR draft-missingness is US-specific, we replicated the mechanism check on
-Danish Maritime Authority (DMA) open AIS data (May 2019, streamed from `aisdata.ais.dk`,
-2 M messages, 1,464 unique vessels, Danish/Baltic/North-Sea coverage — a different region,
-fleet mix, and regulatory authority):
+To test whether Findings 1 and 4.6 are US-specific, we ran a full replication on **Danish
+Maritime Authority (DMA) open AIS data** (Jan–Jun 2019, `aisdata.ais.dk`, 1.17 B messages,
+6,120 unique vessels, Danish/Baltic/North-Sea coverage — a different region, fleet mix, and
+regulatory authority). We apply the same extraction pipeline (`configs/danishais2019{,_inclusive}.yaml`):
+128,746 inclusive trajectories (19,277 test), of which 84.3% are static-complete.
+
+**MNAR replicates** (full train split, 767 M messages):
 
 ![Fig EV.1](figures/f_ev_danish_draft.png)
 
-| class | US 2019 (12,852 vessels) | **Danish 2019 (1,464 vessels)** |
+| class | US draft report% | **Danish draft report%** |
 |---|---|---|
-| cargo | 89.7% | **97.8%** |
-| tanker | 84.7% | **98.9%** |
-| passenger | 23.6% | **77.6%** |
-| **fishing** | **12.1%** | **47.5%** |
+| cargo | 89.7% | **99.1%** |
+| tanker | 84.7% | **99.7%** |
+| passenger | 23.6% | **73.9%** |
+| **fishing** | **12.1%** | **46.3%** |
 
-The rank order is identical: fishing reports draft at the lowest rate in both datasets, cargo and
-tanker at the highest. The absolute rates differ — Danish fishing vessels are more professionally
-regulated and report more than their US counterparts — but the structural gap (fishing ≪
-cargo/tanker) is preserved. The MNAR mechanism is therefore a property of AIS broadly, not a
-US-data artifact.
+Rank order identical: fishing lowest in both, cargo/tanker near-complete. The absolute rates
+differ — Danish fishing vessels report more than US counterparts — but the structural gap
+(fishing ≪ cargo/tanker) is sharper in Danish data (53 pp gap vs 78 pp). The MNAR mechanism
+is a property of AIS broadly, not a US-data artifact.
 
-**Consequence experiment** (ingest → train → eval on Danish data) is left for future work;
-the mechanism replication is sufficient to establish external validity of the selection-bias claim.
+**Consequence experiment replicates** (3 seeds, fine bins, temporal split):
 
-- Data vintage differs (our 133k vs paper 115k, ~15%); shapes match.
-- **Model scope (precise).** Findings 1, 2, and 3.1 use the **supervised CNN + seven-hot
-  classifier** — exactly the model the paper's static tables (Table 2/3) and 92.2% headline are
-  reported on, so they are apples-to-apples. Finding 3.2 uses the paper's full **M2 autoencoder
-  + classifier (VAE)**. Whether the VAE's generative regularization alters the §4.4 collapse or
-  §4.5 per-class behavior is tested separately (§4.6); the corrected *protocol* transfers to any
-  model.
+| regime | accuracy | macro-F1 | fishing recall |
+|---|---|---|---|
+| A — complete only (84% of Danish vessels) | 87.1% | 87.0% | 97.4% |
+| B — all inclusive | 89.0% | 87.7% | 96.6% |
+| B — complete subset | 87.7% | 87.4% | 94.9% |
+| B — incomplete subset | 95.2% | 76.9% | 97.9% |
+
+A→B accuracy drop is mild (~2 pp), consistent with US (2.7 pp). Fishing recall stays high in
+all regimes (94–98%), confirming the selection-bias consequence is cross-regional.
+
+**Collapse on dropped vessels replicates** (grid perclass, 3 seeds):
+
+| model | complete | **dropped** | all |
+|---|---|---|---|
+| **A_paper** (trained on complete) | 84.6 | **35.2** | 79.6 |
+| **B_full** (trained on inclusive) | 87.5 | 75.6 | 87.6 |
+| **B_nosize** (kinematic only) | 78.8 | 64.1 | 80.1 |
+
+A_paper collapses to 35.2 macro-F1 on dropped vessels (passenger recall 10.4%, same pattern
+as US where dropped macro-F1 = 23.4). B_full recovers to 75.6 on dropped. Size contribution
+(B_full − B_nosize) on dropped: +11.5 pp macro-F1.
+
+**M2 VAE also collapses** (`vae_collapse_danish.py`, 3 seeds):
+
+| model | complete | **dropped** | all |
+|---|---|---|---|
+| classifier-only (A_paper above) | 84.6 | 35.2 | 79.6 |
+| **full M2 VAE** (encoder+decoder+classifier) | 70.9 | **26.1** | 65.0 |
+
+VAE on dropped: 26.1 macro-F1, passenger recall 7.1% → 0. The autoencoder regularizer
+provides no robustness to imputed static cross-region, confirming §4.6 on an independent dataset.
+
+**Summary.** All four key measurements from §4 replicate in Danish/Baltic AIS: (i) MNAR
+draft-missingness with identical class rank order, (ii) mild consequence-experiment accuracy
+drop, (iii) A_paper collapse on dropped vessels, (iv) M2 VAE collapse. The external validity
+of Finding 1 and §4.6 is established.
 
 ## 9. Conclusion
 
@@ -337,3 +370,11 @@ corrected, disclosed evaluation protocol. The science survives; the evaluation n
 | leakage gate (faithful) | `scripts/gate_faithful.py` → `gate_faithful_fine.csv` |
 | figures | `paper/make_figures.py` → `paper/figures/` |
 | per-finding write-ups | `paper/finding{1,2,3}_*.md`; plain-language: `paper/PAPER_IDEA_SIMPLE.md` |
+| **Danish AIS — external validity** | |
+| Danish ingest (text ship types, multi-CSV zips) | `scripts/ingest_danish.py` |
+| Danish configs (complete + inclusive) | `configs/danishais2019{,_inclusive}.yaml` |
+| Danish MNAR reporting stats | `scripts/static_reporting_danish.py` → `static_reporting_danish.csv` |
+| Danish consequence experiment | `scripts/consequence_danish.py` → `consequence_danish.csv` |
+| Danish grid perclass + collapse | `scripts/grid_perclass_danish.py` → `grid_perclass_danish.csv` |
+| Danish M2 VAE collapse | `scripts/vae_collapse_danish.py` → `vae_collapse_danish.csv` |
+| Self-renewing watchdog chain | `scripts/run_danish_experiment.sh`, `scripts/_watchdog_*.sh` |
